@@ -27,23 +27,53 @@ from supabase import Client, create_client
 # ---------------------------------------------------------------------------
 # 경로 · 환경
 # ---------------------------------------------------------------------------
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+_THIS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = _THIS_DIR.parent.parent.parent
 ENV_PATH = ROOT_DIR / ".env"
-LOG_DIR = ROOT_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+if ENV_PATH.is_file():
+    pass
+elif (_THIS_DIR / ".env").is_file():
+    ROOT_DIR = _THIS_DIR
+    ENV_PATH = _THIS_DIR / ".env"
+else:
+    # Streamlit Cloud: repo is read-only; avoid parent chains like /mount
+    ROOT_DIR = _THIS_DIR
+    ENV_PATH = _THIS_DIR / ".env"
 
 load_dotenv(ENV_PATH)
 
 
+def _writable_log_dir() -> Path | None:
+    """Use a writable directory (e.g. /tmp on Streamlit Cloud)."""
+    candidates = [
+        ROOT_DIR / "logs",
+        Path(tempfile.gettempdir()) / "multi_session_ref_logs",
+    ]
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe = d / ".w_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return d
+        except OSError:
+            continue
+    return None
+
+
 def setup_logging() -> None:
-    log_file = LOG_DIR / f"chatbot_{datetime.now().strftime('%Y%m%d')}.log"
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    log_dir = _writable_log_dir()
+    if log_dir is not None:
+        try:
+            log_file = log_dir / f"chatbot_{datetime.now().strftime('%Y%m%d')}.log"
+            handlers.insert(0, logging.FileHandler(log_file, encoding="utf-8"))
+        except OSError:
+            pass
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
     )
     for name in ("httpx", "httpcore", "urllib3", "openai", "langchain", "langchain_openai"):
         logging.getLogger(name).setLevel(logging.WARNING)
